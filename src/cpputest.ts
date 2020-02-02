@@ -4,6 +4,8 @@ import { TestSuiteInfo, TestInfo, TestRunStartedEvent, TestRunFinishedEvent, Tes
 import { CppUTest, CppUTestGroup } from './CppUTestImplementation';
 import * as xml2js from 'xml2js';
 import * as fs from 'fs';
+import * as os from 'os';
+import { spawn } from 'child_process';
 
 let suite: CppUTestGroup;
 const processes: ChildProcess[] = Array<ChildProcess>();
@@ -25,7 +27,8 @@ export function loadTests(): Promise<TestSuiteInfo> {
             suite = new CppUTestGroup("CppuTest Suite");
             groups.forEach(g => suite.children.push(new CppUTestGroup(g)));
             groupStrings.forEach(gs => suite.TestGroups.forEach(tg => tg.addTest(gs)));
-            resolve(suite);
+            resolveLineNumers(suite).then(() => resolve(suite));
+            // resolve(suite);
         })
     });
     return Promise.resolve<TestSuiteInfo>(promise);
@@ -211,4 +214,61 @@ function resolveSettingsVariable(input: string | undefined) : string
     {
         return "";
     }   
+}
+
+interface FileInfo
+{
+    line?: string;
+    filename?: string;
+}
+
+async function resolveLineNumers(suite: CppUTestGroup): Promise<CppUTestGroup>
+{
+    if(os.type() === "Linux")
+    {
+        const forkPromises: Promise<FileInfo|void>[] = [];
+        suite.TestGroups.forEach(g => 
+        {
+            g.Tests.forEach(t => {
+                forkPromises.push(grepForGroupAndTestname(g.label, t.label).then((res) =>
+                {
+                    t.line = res.line ? parseInt(res.line) : undefined;
+                    t.file = res.filename;
+                })
+                )
+            })
+        })
+        await Promise.all(forkPromises);
+        return suite;
+    }
+    return Promise.resolve(suite);
+}
+
+function grepForGroupAndTestname(group: string, test: string): Promise<FileInfo>
+{
+    return new Promise<FileInfo>((resolve, reject) => 
+    {
+        let res: string = '';
+        // TODO: Add new source directory in settings
+        const child = spawn('egrep', ['-rnw', getTestPath() + '/..', '-e', `TEST\\s*\\(${group},\\s*${test}`]);
+        child.stdout.on('data', buffer => 
+        {
+            res += buffer.toString();
+        });
+        child.stdout.on('end', () => 
+        {
+            const retArray: string[] = res.split(":");
+            if(retArray.length === 3)
+            {
+                resolve({
+                    filename: retArray[0],
+                    line: retArray[1]
+                });
+            }
+            else
+            {
+                resolve({});
+            }
+        });
+    });
 }
